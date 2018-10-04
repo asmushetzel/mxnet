@@ -25,6 +25,7 @@ import random as rnd
 from common import setup_module, with_seed, random_seed, teardown
 import scipy.stats as ss
 import unittest
+from mxnet.test_utils import *
 
 def same(a, b):
     return np.sum(a != b) == 0
@@ -38,6 +39,9 @@ def check_with_device(device, dtype):
             'name': 'normal',
             'symbol': mx.sym.random.normal,
             'ndop': mx.nd.random.normal,
+            'pdfsymbol': mx.sym.random_pdf_normal,
+            'pdffunc': ss.norm.pdf, 
+            'discrete': False,
             'params': { 'loc': 10.0, 'scale': 0.5 },
             'inputs': [ ('loc',[ [ 0.0, 2.5 ], [ -9.75, -7.0 ] ]) , ('scale',[ [ 1.0, 3.7 ], [ 4.2, 1.5 ] ]) ],
             'checks': [
@@ -58,6 +62,9 @@ def check_with_device(device, dtype):
             'name': 'uniform',
             'symbol': mx.sym.random.uniform,
             'ndop': mx.nd.random.uniform,
+            'pdfsymbol': mx.sym.random_pdf_uniform,
+            'pdffunc': lambda x, low, high: ss.uniform.pdf(x, low, high-low),            
+            'discrete': False,
             'params': { 'low': -1.5, 'high': 3.0 },
             'inputs': [ ('low', [ [ 0.0, 2.5 ], [ -9.75, -1.0 ] ]) , ('high', [ [ 1.0, 3.7 ], [ 4.2, 10.5 ] ]) ],
             'checks': [
@@ -69,8 +76,11 @@ def check_with_device(device, dtype):
                 'name': 'gamma',
                 'symbol': mx.sym.random.gamma,
                 'ndop': mx.nd.random.gamma,
+                'pdfsymbol': mx.sym.random_pdf_gamma,
+                'pdffunc': lambda x, alpha, beta: ss.gamma.pdf(x, alpha, 0, 1/beta),            
+                'discrete': False,
                 'params': { 'alpha': 9.0, 'beta': 0.5 },
-                'inputs': [ ('alpha', [ [ 0.0, 2.5 ], [ 9.75, 11.0 ] ]) , ('beta', [ [ 1.0, 0.7 ], [ 0.5, 0.3 ] ]) ],
+                'inputs': [ ('alpha', [ [ 0.1, 2.5 ], [ 9.75, 11.0 ] ]) , ('beta', [ [ 1.0, 0.7 ], [ 0.5, 0.3 ] ]) ],
                 'checks': [
                     ('mean', lambda x, params: np.mean(x.astype(np.float64)) - params['alpha'] * params['beta'], tol),
                     ('std', lambda x, params: np.std(x.astype(np.float64)) - np.sqrt(params['alpha'] * params['beta'] ** 2), tol)
@@ -80,6 +90,9 @@ def check_with_device(device, dtype):
                 'name': 'exponential',
                 'symbol': mx.sym.random.exponential,
                 'ndop': mx.nd.random.exponential,
+                'pdfsymbol': mx.sym.random_pdf_exponential,
+                'pdffunc': lambda x, lam: ss.expon.pdf(x, 0, 1/lam),            
+                'discrete': False,
                 'params': { 'scale': 1.0/4.0 },
                 'inputs': [ ('scale', [ [ 1.0/1.0, 1.0/8.5 ], [ 1.0/2.7 , 1.0/0.5 ] ]) ],
                 'checks': [
@@ -91,6 +104,9 @@ def check_with_device(device, dtype):
                 'name': 'poisson',
                 'symbol': mx.sym.random.poisson,
                 'ndop': mx.nd.random.poisson,
+                'pdfsymbol': mx.sym.random_pdf_poisson,
+                'pdffunc': ss.poisson.pmf,            
+                'discrete': True,
                 'params': { 'lam': 4.0 },
                 'inputs': [ ('lam', [ [ 25.0, 8.5 ], [ 2.7 , 0.5 ] ]) ],
                 'checks': [
@@ -102,6 +118,9 @@ def check_with_device(device, dtype):
                 'name': 'neg-binomial',
                 'symbol': mx.sym.random.negative_binomial,
                 'ndop': mx.nd.random.negative_binomial,
+                'pdfsymbol': mx.sym.random_pdf_negative_binomial,
+                'pdffunc': ss.nbinom.pmf,            
+                'discrete': True,
                 'params': { 'k': 3, 'p': 0.4 },
                 'inputs': [ ('k', [ [ 3, 4 ], [ 5 , 6 ] ]) , ('p', [ [ 0.4 , 0.77 ], [ 0.5, 0.84 ] ]) ],
                 'checks': [
@@ -113,6 +132,9 @@ def check_with_device(device, dtype):
                 'name': 'gen-neg-binomial',
                 'symbol': mx.sym.random.generalized_negative_binomial,
                 'ndop': mx.nd.random.generalized_negative_binomial,
+                'pdfsymbol': mx.sym.random_pdf_generalized_negative_binomial,
+                'pdffunc': lambda x, mu, alpha: ss.nbinom.pmf(x, 1.0/alpha, 1.0/(mu*alpha+1.0)), 
+                'discrete': True,
                 'params': { 'mu': 2.0, 'alpha': 0.3 },
                 'inputs': [ ('mu', [ [ 2.0, 2.5 ], [ 1.3, 1.9 ] ]) , ('alpha', [ [ 1.0, 0.1 ], [ 0.2, 0.5 ] ]) ],
                 'checks': [
@@ -125,6 +147,9 @@ def check_with_device(device, dtype):
 
     # Create enough samples such that we get a meaningful distribution.
     shape = (500, 500)
+    # Test pdf on smaller shapes as backward checks will take too long otherwise.
+    # This must be a subshape of the former one. 
+    pdfshape = (30, 30)
     for symbdic in symbols:
         name = symbdic['name']
         ndop = symbdic['ndop']
@@ -212,6 +237,50 @@ def check_with_device(device, dtype):
                 samples = un1[i,j]
                 for check_name, check_func, tol in symbdic['checks']:
                     assert np.abs(check_func(samples, params)) < tol, "symbolic test: %s check for `%s` did not pass" % (check_name, name)
+
+
+        # use only a subset of the generated samples
+        un1 = np.resize(un1, (un1.shape[0], un1.shape[1], pdfshape[0], pdfshape[1]))
+        print(name)
+        symbol  = symbdic['pdfsymbol']
+        pdffunc = symbdic['pdffunc']
+        v0 = mx.sym.Variable('v0')
+        v1 = mx.sym.Variable('v1')
+        v2 = mx.sym.Variable('v2')
+        p1 = np.array(symbdic['inputs'][0][1])
+        p2 = None if single_param else np.array(symbdic['inputs'][1][1])
+        # Move samples away from boundaries of support
+        if name == 'gamma' or name == 'exponential':
+           un1 = np.maximum(un1, 1e-1)
+        if name == 'uniform':
+          un1 = np.minimum(np.maximum(un1.reshape((un1.shape[0],un1.shape[1],-1)), p1.reshape((p1.shape[0],p1.shape[1],-1))+1e-4),
+                           p2.reshape((p2.shape[0],p2.shape[1],-1))-1e-4).reshape(un1.shape) 
+        for use_log in [False, True]:
+            test_pdf = symbol(v0, v1, is_log=use_log, dtype=dtype) if single_param else symbol(v0, v1, v2, is_log=use_log, dtype=dtype)
+            forw_atol  = 1e-7 if dtype != 'float16' else 1e-3
+            forw_rtol  = 1e-4 if dtype != 'float16' else 5e-2
+            backw_atol = 1e-7 if dtype == 'float64' else 1e-3
+            backw_rtol = 1e-4 if dtype == 'float64' else 5e-2
+            if single_param:
+                res = pdffunc(un1.reshape((un1.shape[0],un1.shape[1],-1)),
+                    p1.reshape((p1.shape[0],p1.shape[1],-1))).reshape(un1.shape)
+                if use_log: 
+                    res = np.log(res);
+                check_symbolic_forward(test_pdf, [un1, p1], [res], atol=forw_atol, rtol=forw_rtol, dtype=np.dtype(dtype))
+                if dtype == 'float64':
+                  grad_nodes = ['v1'] if symbdic['discrete'] else ['v0', 'v1']
+                  check_numeric_gradient(test_pdf, [un1, p1], grad_nodes=grad_nodes, atol=backw_atol, rtol=backw_rtol, dtype=np.dtype(dtype)) 
+            else:
+                res = pdffunc(un1.reshape((un1.shape[0],un1.shape[1],-1)),
+                    p1.reshape((p1.shape[0],p1.shape[1],-1)),
+                    p2.reshape((p2.shape[0],p2.shape[1],-1))).reshape(un1.shape)
+                if use_log: 
+                    res = np.log(res);
+                check_symbolic_forward(test_pdf, [un1, p1, p2], [res], atol=forw_atol, rtol=forw_rtol, dtype=np.dtype(dtype))
+                if dtype == 'float64':
+                  print("BACKWARD")
+                  grad_nodes = ['v1', 'v2'] if symbdic['discrete'] else ['v0', 'v1', 'v2']
+                  check_numeric_gradient(test_pdf, [un1, p1, p2], grad_nodes=grad_nodes, atol=backw_atol, rtol=backw_rtol, dtype=np.dtype(dtype)) 
 
 @with_seed()
 def test_random():
@@ -768,5 +837,6 @@ def test_shuffle():
     testLarge(mx.nd.arange(0, 100000).reshape((10000, 10)), 10)
 
 if __name__ == '__main__':
+    #test_random()
     import nose
     nose.runmodule()
