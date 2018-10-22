@@ -256,7 +256,7 @@ def check_with_device(device, dtype):
           un1 = np.minimum(np.maximum(un1.reshape((un1.shape[0],un1.shape[1],-1)), p1.reshape((p1.shape[0],p1.shape[1],-1))+1e-4),
                            p2.reshape((p2.shape[0],p2.shape[1],-1))-1e-4).reshape(un1.shape) 
         for use_log in [False, True]:
-            test_pdf = symbol(v0, v1, is_log=use_log, dtype=dtype) if single_param else symbol(v0, v1, v2, is_log=use_log, dtype=dtype)
+            test_pdf = symbol(v0, v1, is_log=use_log) if single_param else symbol(v0, v1, v2, is_log=use_log)
             forw_atol  = 1e-7 if dtype != 'float16' else 1e-3
             forw_rtol  = 1e-4 if dtype != 'float16' else 5e-2
             backw_atol = 1e-7 if dtype == 'float64' else 1e-3
@@ -267,6 +267,7 @@ def check_with_device(device, dtype):
                 if use_log: 
                     res = np.log(res);
                 check_symbolic_forward(test_pdf, [un1, p1], [res], atol=forw_atol, rtol=forw_rtol, dtype=np.dtype(dtype))
+                #if dtype == 'float64':
                 if dtype == 'float64':
                   grad_nodes = ['v1'] if symbdic['discrete'] else ['v0', 'v1']
                   check_numeric_gradient(test_pdf, [un1, p1], grad_nodes=grad_nodes, atol=backw_atol, rtol=backw_rtol, dtype=np.dtype(dtype)) 
@@ -288,6 +289,41 @@ def test_random():
     check_with_device(mx.context.current_context(), 'float32')
     check_with_device(mx.context.current_context(), 'float64')
 
+@with_seed()
+def test_dirichlet():
+    num = 100
+    alpha = np.random.uniform(low=0.1, high=10, size=(4, 5))
+    #alpha = np.random.uniform(low=0.1, high=1.1, size=(1, 5))
+    samples = []
+    results = []
+    for a in alpha:
+        v = ss.dirichlet.rvs(a, size=num)
+        samples.append(v)
+        results.append(ss.dirichlet.logpdf(v.transpose(), a))
+    samples = np.concatenate(samples, axis=0).reshape((2, 2, num, 5))
+    results = np.concatenate(results, axis=0).reshape((2, 2, num))
+    #samples = np.concatenate(samples, axis=0).reshape((1, num, 5))
+    #results = np.concatenate(results, axis=0).reshape((1, num))
+    print(samples)
+    print(results)
+    alpha = alpha.reshape((2, 2, 5))
+    #alpha = alpha.reshape((1, 5))
+    #for dtype in ['float16', 'float32', 'float64']:
+    for dtype in ['float32', 'float64']:
+        print(dtype)
+        forw_atol  = 1e-7 if dtype != 'float16' else 1e-3
+        forw_rtol  = 1e-4 if dtype != 'float16' else 5e-2
+        backw_atol = 1e-7 if dtype == 'float64' else 1e-3
+        backw_rtol = 1e-4 if dtype == 'float64' else 5e-2
+        for use_log in [False, True]:
+            print("use_log",use_log)
+            v0 = mx.sym.Variable('v0')
+            v1 = mx.sym.Variable('v1')
+            test_pdf = mx.sym.random_pdf_dirichlet(v0, v1, is_log=use_log)
+            res = results if use_log else np.exp(results)
+            check_symbolic_forward(test_pdf, [samples, alpha], [res], atol=forw_atol, rtol=forw_rtol, dtype=np.dtype(dtype))
+            if dtype == 'float64':
+                check_numeric_gradient(test_pdf, [samples, alpha], numeric_eps=1e-7, atol=backw_atol, rtol=backw_rtol, dtype=np.dtype(dtype))
 
 # Set seed variously based on `start_seed` and `num_init_seeds`, then set seed finally to `final_seed`
 def set_seed_variously(init_seed, num_init_seeds, final_seed):
@@ -838,5 +874,6 @@ def test_shuffle():
 
 if __name__ == '__main__':
     #test_random()
-    import nose
-    nose.runmodule()
+    test_dirichlet()
+    #import nose
+    #nose.runmodule()
